@@ -3744,6 +3744,7 @@ class MainWindow(QMainWindow):
         if not self.output_data:
             # If output_data is empty, try to process first
            
+
             try:
                 self._preview_converted_data()
                 # Wait for processing to finish, then save.
@@ -3858,10 +3859,26 @@ class MainWindow(QMainWindow):
 
     def save_edited_data(self, output_path, format_type):
         try:
-            self.generator.save_data(self.input_data, output_path, format_type)
+            # Ensure data is properly typed as List[Dict[str, Any]]
+            if not isinstance(self.input_data, list):
+                raise ValueError("Input data must be a list")
+            
+            # Validate and convert data to ensure string keys
+            validated_data: List[Dict[str, Any]] = []
+            for item in self.input_data:
+                if isinstance(item, dict):
+                    # Convert any non-string keys to strings
+                    validated_item: Dict[str, Any] = {}
+                    for key, value in item.items():
+                        validated_item[str(key)] = value
+                    validated_data.append(validated_item)
+                else:
+                    raise ValueError(f"All items must be dictionaries, found: {type(item)}")
+            
+            self.generator.save_data(validated_data, output_path, format_type)
             if self.status_bar:
-                self.status_bar.showMessage(f"Saved {len(self.input_data)} records to {output_path}")
-            QMessageBox.information(self, "Save Successful", f"Successfully saved {len(self.input_data)} records to {output_path}")
+                self.status_bar.showMessage(f"Saved {len(validated_data)} records to {output_path}")
+            QMessageBox.information(self, "Save Successful", f"Successfully saved {len(validated_data)} records to {output_path}")
         except Exception as e:
             self.show_error(f"Error saving data: {str(e)}")
 
