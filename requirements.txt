@@ -1,0 +1,249 @@
+# Dataset Generator Original - Comprehensive Requirements File
+# Version: 2.1.0 | Last Updated: 2024
+
+# ===== CORE DEPENDENCIES (Required) =====
+# These are essential for basic application functionality
+
+# GUI Framework
+PyQt5>=5.15.0,<6.0.0
+PyQt5-Qt5>=5.15.0,<6.0.0  
+PyQt5-sip>=12.8.0,<13.0.0
+
+# Data Processing Core
+pandas>=1.3.0,<3.0.0
+numpy>=1.21.0,<2.0.0
+tqdm>=4.60.0,<5.0.0
+
+# Console Output and CLI
+rich>=10.0.0,<14.0.0
+
+# Basic File Format Support
+openpyxl>=3.0.0,<4.0.0          # Excel files (.xlsx, .xls)
+
+# ===== EXTENDED FORMAT SUPPORT (Recommended) =====
+# Uncomment lines below to enable specific file format support
+
+# High-Performance Formats
+pyarrow>=5.0.0,<15.0.0          # Parquet format (.parquet)
+h5py>=3.3.0,<4.0.0              # HDF5 format (.h5, .hdf5)
+
+# Markup and Serialization Formats  
+PyYAML>=5.4.0,<7.0.0            # YAML format (.yaml, .yml)
+lxml>=4.6.0,<5.0.0              # Enhanced XML support (.xml)
+fastavro>=1.4.0,<2.0.0          # Avro serialization (.avro)
+
+# Database Support
+sqlalchemy>=1.4.0,<3.0.0        # Database connectivity
+sqlite3                         # SQLite support (built-in)
+
+# ===== DATA SCIENCE & ML FEATURES (Optional) =====
+# Uncomment for advanced data processing capabilities
+
+# Machine Learning and Statistics
+scikit-learn>=1.0.0,<2.0.0      # Dataset splitting, metrics, utilities
+scipy>=1.7.0,<2.0.0             # Statistical functions
+statsmodels>=0.12.0,<1.0.0      # Advanced statistical analysis
+
+# Data Generation and Augmentation
+Faker>=8.0.0,<21.0.0            # Synthetic data generation
+mimesis>=6.0.0,<8.0.0           # Alternative data generation library
+
+# Natural Language Processing
+nltk>=3.6.0,<4.0.0              # Text processing and tokenization
+textblob>=0.15.0,<1.0.0         # Simple NLP operations
+spacy>=3.4.0,<4.0.0             # Advanced NLP (optional, large download)
+
+# ===== VISUALIZATION & ANALYTICS (Optional) =====
+# Uncomment for data visualization and advanced analytics
+
+# Core Plotting
+matplotlib>=3.4.0,<4.0.0        # Basic plotting and charts
+seaborn>=0.11.0,<1.0.0          # Statistical data visualization
+
+# Advanced Visualization
+plotly>=5.0.0,<6.0.0            # Interactive plots
+bokeh>=2.4.0,<4.0.0             # Web-based visualization
+altair>=4.2.0,<6.0.0            # Grammar of graphics
+
+# ===== PERFORMANCE & UTILITIES (Optional) =====
+# Uncomment for enhanced performance and utility features
+
+# Performance Enhancement
+numba>=0.56.0,<1.0.0            # JIT compilation for numerical code
+joblib>=1.1.0,<2.0.0            # Parallel processing utilities
+dask>=2021.12.0,<2025.0.0       # Out-of-core and parallel computing
+
+# Memory and IO Optimization
+memory-profiler>=0.60.0,<1.0.0  # Memory usage monitoring
+psutil>=5.8.0,<6.0.0            # System and process utilities
+
+# ===== DEVELOPMENT DEPENDENCIES (Dev Only) =====
+# Only install these for development work
+
+# Code Quality
+black>=21.0.0,<24.0.0           # Code formatting
+isort>=5.10.0,<6.0.0            # Import sorting
+flake8>=4.0.0,<7.0.0            # Linting and style checking
+mypy>=0.910,<2.0.0              # Static type checking
+
+# Testing Framework
+pytest>=6.2.0,<8.0.0            # Testing framework
+pytest-qt>=4.0.0,<5.0.0         # PyQt testing utilities
+pytest-cov>=3.0.0,<5.0.0        # Coverage reporting
+hypothesis>=6.0.0,<7.0.0        # Property-based testing
+
+# Documentation
+sphinx>=4.0.0,<8.0.0            # Documentation generation
+sphinx-rtd-theme>=1.0.0,<2.0.0  # Read the Docs theme
+
+# ===== SECURITY & VALIDATION (Recommended) =====
+# Uncomment for enhanced security and data validation
+
+# Data Validation
+cerberus>=1.3.0,<2.0.0          # Schema validation
+jsonschema>=4.0.0,<5.0.0        # JSON schema validation
+marshmallow>=3.14.0,<4.0.0      # Object serialization/validation
+
+# Security
+cryptography>=3.4.0,<42.0.0     # Encryption and secure data handling
+python-dotenv>=0.19.0,<2.0.0    # Environment variable management
+
+# ===== INSTALLATION PROFILES =====
+# Different installation commands for different use cases
+
+# Profile 1: Minimal Installation (Core functionality only)
+# pip install PyQt5 pandas numpy rich tqdm openpyxl
+
+# Profile 2: Standard Installation (Most common formats + ML)
+# pip install PyQt5 pandas numpy rich tqdm openpyxl pyarrow h5py PyYAML scikit-learn Faker matplotlib
+
+# Profile 3: Full Installation (All features)
+# pip install PyQt5 pandas numpy rich tqdm openpyxl pyarrow h5py PyYAML lxml fastavro scikit-learn Faker nltk matplotlib seaborn plotly
+
+# Profile 4: Development Installation (All dependencies + dev tools)
+# pip install -r requirements.txt && pip install black flake8 mypy pytest pytest-qt
+
+# ===== PLATFORM-SPECIFIC NOTES =====
+
+# Windows:
+# - All packages install cleanly via pip
+# - No additional system dependencies required
+# - Tested on Windows 10/11
+
+# Linux (Ubuntu/Debian):
+# sudo apt-get update
+# sudo apt-get install python3-pyqt5 python3-pyqt5.qtwidgets python3-dev
+# pip install -r requirements.txt
+
+# Linux (CentOS/RHEL/Fedora):
+# sudo yum install python3-qt5 python3-qt5-devel python3-devel
+# pip install -r requirements.txt
+
+# macOS:
+# brew install python-tk
+# pip install -r requirements.txt
+
+# ===== VIRTUAL ENVIRONMENT SETUP =====
+
+# Using venv (Recommended):
+# python -m venv dataset_env
+# dataset_env\Scripts\activate  # Windows
+# source dataset_env/bin/activate  # Linux/Mac
+# pip install -r requirements.txt
+
+# Using conda:
+# conda create -n dataset_env python=3.9
+# conda activate dataset_env
+# pip install -r requirements.txt
+
+# ===== VERSION COMPATIBILITY MATRIX =====
+
+# Python 3.8:  ✅ Fully supported
+# Python 3.9:  ✅ Fully supported (Recommended)
+# Python 3.10: ✅ Fully supported (Recommended)  
+# Python 3.11: ✅ Fully supported
+# Python 3.12: ⚠️  Most packages work, some may need updates
+
+# PyQt5 vs PyQt6:
+# - This application uses PyQt5 (stable, well-tested)
+# - PyQt6 migration planned for v3.0
+# - Do not mix PyQt5 and PyQt6 in the same environment
+
+# ===== TROUBLESHOOTING =====
+
+# Common Issues and Solutions:
+
+# 1. PyQt5 Installation Issues:
+# pip install --upgrade pip setuptools wheel
+# pip install PyQt5 --no-cache-dir
+
+# 2. HDF5/h5py Issues on Windows:
+# pip install --only-binary=h5py h5py
+
+# 3. Memory Issues with Large Datasets:
+# export PYTHONHASHSEED=0
+# Increase virtual memory/swap space
+
+# 4. GUI Not Displaying on Linux:
+# export QT_QPA_PLATFORM=xcb
+# sudo apt-get install python3-pyqt5.qtwidgets
+
+# 5. Import Errors:
+# pip install --upgrade --force-reinstall PyQt5
+
+# ===== PACKAGE SIZE ESTIMATES =====
+
+# Core packages (~200MB):
+# PyQt5, pandas, numpy, rich, tqdm, openpyxl
+
+# Standard packages (~500MB):  
+# Core + pyarrow, h5py, PyYAML, scikit-learn, Faker, matplotlib
+
+# Full installation (~1.2GB):
+# All packages including visualization, NLP, and development tools
+
+# ===== ALTERNATIVE PACKAGE MANAGERS =====
+
+# Poetry (pyproject.toml):
+# poetry install
+
+# Pipenv (Pipfile):
+# pipenv install
+
+# Conda (environment.yml):
+# conda env create -f environment.yml
+
+# ===== SECURITY CONSIDERATIONS =====
+
+# Pin exact versions for production:
+# pip freeze > requirements-lock.txt
+
+# Audit dependencies for vulnerabilities:
+# pip install safety
+# safety check
+
+# Keep dependencies updated:
+# pip install --upgrade pip-tools
+# pip-compile --upgrade requirements.in
+
+# ===== PERFORMANCE TUNING =====
+
+# For large datasets (>1GB):
+# - Install pyarrow for faster Parquet I/O
+# - Install numba for numerical computations
+# - Consider dask for out-of-core processing
+# - Increase system RAM if possible
+
+# For GUI responsiveness:
+# - Install latest PyQt5 version
+# - Ensure graphics drivers are updated
+# - Use SSD storage for better I/O performance
+
+# ===== LICENSE NOTES =====
+
+# All listed packages are compatible with MIT license
+# Some packages (like Qt) have additional commercial licensing options
+# Review individual package licenses for commercial deployment
+
+# Last updated: 2024-12-19
+# Compatible with dataset_generator_original.py v2.1.0
