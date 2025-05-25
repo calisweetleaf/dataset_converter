@@ -17,7 +17,7 @@ function Test-PowerShellSyntax {
  try {
   $errors = $null
   $null = Get-Content $FilePath | Out-Null # Ensure file is readable
-  $ast = [System.Management.Automation.Language.Parser]::ParseFile($FilePath, [ref]$null, [ref]$errors)
+  [System.Management.Automation.Language.Parser]::ParseFile($FilePath, [ref]$null, [ref]$errors)
   if ($errors.Count -gt 0) {
    Write-Warning "Syntax errors found in $($FilePath):"
    $errors | ForEach-Object { Write-Warning "  $($_.Message) (Line: $($_.Extent.StartLineNumber))" }
