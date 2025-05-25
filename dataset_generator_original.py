@@ -25,21 +25,19 @@ Version 2 Enhancements:
 - Improved error handling and user feedback.
 """
 
+from operator import index
 import os
 import sys
 import json
 import csv
-import argparse
-import re
-import logging
-import tempfile
-import datetime
-import uuid
-import math
-import random
 import sqlite3
-import pandas as pd
-import numpy as np
+import re
+import uuid
+import random
+import math
+import multiprocessing
+import logging
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from tqdm import tqdm
 from collections import Counter, defaultdict
 from typing import Dict, List, Any, Optional, Union, Tuple, Set, Callable
@@ -58,29 +56,33 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
     QDockWidget, QStackedWidget, QToolBar, QStatusBar, QDialog,
     QWizard, QWizardPage, QFormLayout, QGridLayout, QMenu, QAction,
     QToolTip, QHeaderView, QInputDialog, QCompleter)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl, QSize, QTimer, QSettings, QMimeData, QStringListModel, QSizeF, QPointF
-from PyQt5.QtGui import QIcon, QFont, QDrag, QPixmap, QColor, QPainter, QPalette, QDesktopServices
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl, QSize, QTimer, QSettings, QMimeData, QStringListModel, QSizeF, QPointF, QEvent
+from PyQt5.QtGui import QIcon, QFont, QDrag, QPixmap, QColor, QPainter, QPalette, QDesktopServices, QHelpEvent
+import pandas as pd
+import numpy as np
 try:
-    import pyarrow.parquet as pq
     import pyarrow as pa
+    import pyarrow.parquet as pq
     PARQUET_AVAILABLE = True
 except ImportError:
     PARQUET_AVAILABLE = False
     print("Warning: 'pyarrow' not found. Parquet format support disabled. Install with 'pip install pyarrow'.")
+
 try:
     import h5py
     HDF5_AVAILABLE = True
 except ImportError:
     HDF5_AVAILABLE = False
     print("Warning: 'h5py' not found. HDF5 format support disabled. Install with 'pip install h5py'.")
+
 try:
     import yaml
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
     print("Warning: 'PyYAML' not found. YAML format support disabled. Install with 'pip install PyYAML'.")
+
 try:
-    import xml.etree.ElementTree as ET
     from lxml import etree
     XML_AVAILABLE = True
 except ImportError:
@@ -91,12 +93,14 @@ except ImportError:
         XML_AVAILABLE_BASIC = True
     except ImportError:
         XML_AVAILABLE_BASIC = False
+
 try:
     import fastavro
     AVRO_AVAILABLE = True
 except ImportError:
     AVRO_AVAILABLE = False
     print("Warning: 'fastavro' not found. Avro format support disabled. Install with 'pip install fastavro'.")
+
 try:
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -104,12 +108,14 @@ try:
 except ImportError:
     VISUALIZATION_AVAILABLE = False
     print("Warning: 'matplotlib' and 'seaborn' not found. Visualization features disabled. Install with 'pip install matplotlib seaborn'.")
+
 try:
     from sklearn.model_selection import train_test_split
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
     print("Warning: 'scikit-learn' not found. Dataset splitting features disabled. Install with 'pip install scikit-learn'.")
+
 try:
     from faker import Faker
     FAKER_AVAILABLE = True
@@ -117,6 +123,7 @@ try:
 except ImportError:
     FAKER_AVAILABLE = False
     print("Warning: 'Faker' not found. Auto-generation and anonymization features disabled. Install with 'pip install Faker'.")
+
 try:
     import nltk
     from nltk.tokenize import word_tokenize
@@ -416,7 +423,7 @@ class DatasetGenerator:
                     xml_root = None
                     if XML_AVAILABLE: # Prefer lxml if available
                         logger.debug("Using lxml for XML parsing.")
-                        parsed_tree = etree.parse(file_path)
+                        parsed_tree = etree.parse(file_path, etree.XMLParser())
                         xml_root = parsed_tree.getroot()
                     elif XML_AVAILABLE_BASIC: # Fallback to basic ElementTree
                         logger.debug("Using xml.etree.ElementTree for XML parsing.")
@@ -445,12 +452,9 @@ class DatasetGenerator:
                              # This would create a single entry in self.input_data.
                              # The current _xml_to_dict is designed for an element representing a single record.
                              # Let's stick to the assumption of a root containing multiple record elements.
-                             # If the file is just one record, e.g. <record>...</record>, this loop won't run.
-                             # So, if len(xml_root) == 0, we might want to process xml_root itself if it's meaningful
+                             # If len(xml_root) == 0, we might want to process xml_root itself if it's meaningful
                              # For a dataset, usually there's a list of records.
                              # If one record is at root level, then len(xml_root) would be 0 if it has no children.
-                             # This logic depends heavily on expected XML structure.
-                             # The most common case for a "dataset" is multiple entries.
                              logger.warning(f"XML root '{xml_root.tag}' has no child elements. If the root itself is a single record, this is fine. Otherwise, expected child elements representing records.")
                              # Option: if no children, consider the root as the single item if it's not just a container
                              if xml_root.tag not in ["dataset", "records", "root"]: # common container names
@@ -461,14 +465,12 @@ class DatasetGenerator:
                          logger.warning(f"No data loaded from XML file {file_path}. Ensure it has a root element with child elements representing records, or a single record as root if that's intended.")
                     elif not self.input_data and xml_root is None:
                          logger.error(f"Failed to parse XML root from {file_path}.")
-
-
                 except ET.ParseError as e_et:
                     raise ValueError(f"Error parsing XML with ElementTree: {str(e_et)}. File: {file_path}")
                 except Exception as e_lxml: # lxml might raise etree.XMLSyntaxError which is a subclass of Exception
                     if XML_AVAILABLE and isinstance(e_lxml, etree.XMLSyntaxError):
                          raise ValueError(f"Error parsing XML with lxml: {str(e_lxml)}. File: {file_path}")
-                    raise ValueError(f"An unexpected error occurred during XML parsing: {str(e)}. File: {file_path}")
+                    raise ValueError(f"An unexpected error occurred during XML parsing: {str(e_lxml)}. File: {file_path}")
 
 
             elif format_type == 'yaml':
@@ -1121,7 +1123,7 @@ class DatasetGenerator:
         string_fields = [col for col in df.columns if df[col].dtype == object and df[col].apply(lambda x: isinstance(x, str)).any()]
         
         if string_fields:
-            lengths = df[string_fields].applymap(lambda x: len(str(x)) if x is not None else 0).mean().sort_values(ascending=False)
+            lengths = df[string_fields].map(lambda x: len(str(x)) if x is not None else 0).mean().sort_values(ascending=False)
             sns.barplot(x=lengths.values, y=lengths.index, ax=axes[1], palette="viridis")
             axes[1].set_xlabel("Average Length")
         else:
@@ -1385,22 +1387,25 @@ class DragDropTableWidget(QTableWidget):
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event):
-        mime_data = event.mimeData()
-        if mime_data and mime_data.hasUrls():
-            event.acceptProposedAction()
+        if event:
+            mime_data = event.mimeData()
+            if mime_data is not None and mime_data.hasUrls():
+                event.acceptProposedAction()
 
     def dragMoveEvent(self, event):
-        mime_data = event.mimeData()
-        if mime_data and mime_data.hasUrls():
-            event.acceptProposedAction()
+        if event:
+            mime_data = event.mimeData()
+            if mime_data is not None and mime_data.hasUrls():
+                event.acceptProposedAction()
 
     def dropEvent(self, event):
-        mime_data = event.mimeData()
-        if mime_data and mime_data.hasUrls():
-            for url in mime_data.urls():
-                file_path = url.toLocalFile()
-                self.file_dropped.emit(file_path)
-                break  # Just take the first file
+        if event:
+            mime_data = event.mimeData()
+            if mime_data is not None and mime_data.hasUrls():
+                urls = mime_data.urls()
+                if urls:  # Check if the list of URLs is not empty
+                    file_path = urls[0].toLocalFile()
+                    self.file_dropped.emit(file_path)
 
 
 class CustomComboBox(QComboBox):
@@ -1421,7 +1426,7 @@ class CustomComboBox(QComboBox):
         super().hidePopup()
 
     def event(self, event):
-        if event.type() == event.Type.ToolTip:
+        if event and hasattr(event, 'type') and event.type() == QEvent.Type.ToolTip and isinstance(event, QHelpEvent):
             view = self.view()
             if view:
                 index = view.indexAt(event.pos())
@@ -1431,6 +1436,187 @@ class CustomComboBox(QComboBox):
                         QToolTip.showText(event.globalPos(), self.descriptions[text])
                         return True
         return super().event(event)
+
+
+class ProcessingWorker(QThread):
+    """
+    Worker thread for executing background processing tasks.
+    
+    This class extends QThread to perform dataset operations in the background,
+    preventing the GUI from freezing during long-running tasks such as:
+    - Loading large datasets
+    - Processing and converting data
+    - Data augmentation
+    - Validation and fixing operations
+    - Visualization generation
+    
+    The worker uses PyQt signals to communicate with the main thread:
+    - status_signal: Updates on task progress/status
+    - error_signal: Error messages if task fails
+    - progress_signal: Progress updates (current, total)
+    - finished_signal: Result when task completes successfully
+    
+    Attributes:
+        task (callable): The function/method to execute
+        task_args (tuple): Positional arguments for the task
+        task_kwargs (Dict[str, Any]): Keyword arguments for the task
+    
+    Signals:
+        status_signal (str): Emitted to update status messages
+        error_signal (str): Emitted when an error occurs
+        progress_signal (int, int): Emitted with (current, total) progress
+        finished_signal (object): Emitted with task result on completion
+    
+    Example:
+        worker = ProcessingWorker()
+        worker.status_signal.connect(update_status_label)
+        worker.error_signal.connect(show_error_dialog)        worker.finished_signal.connect(handle_result)
+        worker.set_task(my_function, arg1, arg2, keyword=value)
+        worker.start()
+    """
+    status_signal = pyqtSignal(str)
+    error_signal = pyqtSignal(str)
+    progress_signal = pyqtSignal(int, int)
+    finished_signal = pyqtSignal(object)
+    
+    def __init__(self, generator=None):
+        """Initialize the worker thread with no task set."""
+        super().__init__()
+        self.task = None
+        self.task_args = None
+        self.task_kwargs: Dict[str, Any] = {}
+        self.generator = generator
+        
+    def set_task(self, task, *args, **kwargs):
+        """
+        Set the task to be executed.
+        
+        Args:
+            task (callable): The function or method to execute
+            *args: Positional arguments to pass to the task
+            **kwargs: Keyword arguments to pass to the task
+        """
+        self.task = task
+        self.task_args = args if args else ()
+        self.task_kwargs = kwargs if kwargs else {}
+    
+    def configure(self, task_name, **kwargs):
+        """
+        Configure the worker with a specific task and parameters.
+        
+        This method maps task names to actual methods and sets up the worker
+        to execute the appropriate task with the given parameters.
+        
+        Args:
+            task_name (str): Name of the task to execute ('augment', 'anonymize', 
+                           'split', 'fix', 'validate', 'generate', etc.)
+            **kwargs: Keyword arguments specific to the task
+        """
+        # Map task names to actual methods
+        task_mapping = {
+            'augment': self._augment_data,
+            'anonymize': self._anonymize_data,
+            'split': self._split_data,
+            'fix': self._fix_data,
+            'validate': self._validate_data,
+            'generate': self._generate_data,
+            'load': self._load_data,
+            'save': self._save_data,
+            'process': self._process_data        }
+        if task_name in task_mapping:
+            self.set_task(task_mapping[task_name], **kwargs)
+        else:
+            raise ValueError(f"Unknown task: {task_name}")
+    
+    def _augment_data(self, data, factor, methods, template_name):
+        """Execute data augmentation task."""
+        # This would call the appropriate generator method
+        if self.generator:
+            return self.generator.augment_data(data, factor, methods, template_name)
+        else:
+            raise RuntimeError("No generator instance available")
+    
+    def _anonymize_data(self, data, fields):
+        """Execute data anonymization task."""
+        if self.generator:
+            return self.generator.anonymize_data(data, fields)
+        else:
+            raise RuntimeError("No generator instance available")
+    
+    def _split_data(self, data, ratios):
+        """Execute data splitting task."""
+        if self.generator:
+            return self.generator.split_data(data, ratios)
+        else:
+            raise RuntimeError("No generator instance available")
+    
+    def _fix_data(self, data):
+        """Execute data fixing task."""
+        if self.generator:
+            return self.generator.fix_data(data)
+        else:
+            raise RuntimeError("No generator instance available")
+    
+    def _validate_data(self, data):
+        """Execute data validation task."""
+        if self.generator:
+            return self.generator.validate_data(data)
+        else:
+            raise RuntimeError("No generator instance available")
+    
+    def _generate_data(self, **kwargs):
+        """Execute data generation task."""
+        if self.generator:
+            return self.generator.generate_data(**kwargs)
+        else:
+            raise RuntimeError("No generator instance available")
+    
+    def _load_data(self, file_path):
+        """Execute data loading task."""
+        if self.generator:
+            return self.generator.load_data(file_path)
+        else:
+            raise RuntimeError("No generator instance available")
+    
+    def _save_data(self, data, file_path, format_type):
+        """Execute data saving task."""
+        if self.generator:
+            return self.generator.save_data(data, file_path, format_type)
+        else:
+            raise RuntimeError("No generator instance available")
+    
+    def _process_data(self, **kwargs):
+        """Execute general data processing task."""
+        if self.generator:
+            return self.generator.process_data(**kwargs)
+        else:
+            raise RuntimeError("No generator instance available")
+        
+    def run(self):
+        """
+        Execute the task in the background.
+        
+        This method is called automatically when start() is invoked.
+        It runs the configured task with its arguments and emits the
+        appropriate signals based on success or failure.
+        
+        Emits:
+            finished_signal: On successful completion with result
+            error_signal: On error with error message string
+        """
+        try:
+            if self.task:
+                if self.task_args is None:
+                    self.task_args = ()
+                if self.task_kwargs:
+                    result = self.task(*self.task_args, **self.task_kwargs)
+                else:
+                    result = self.task(*self.task_args)
+                self.finished_signal.emit(result)
+            else:
+                self.error_signal.emit("No task set for worker")
+        except Exception as e:
+            self.error_signal.emit(str(e))
 
 
 class MainWindow(QMainWindow):
@@ -1448,10 +1634,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Dataset Generator for LLM Fine-Tuning (Offline)")
         self.setGeometry(100, 100, 1200, 800)
-        self.setWindowIcon(self._get_icon())
-
-        # Initialize worker thread
-        self.worker = ProcessingWorker()
+        self.setWindowIcon(self._get_icon())        # Initialize worker thread
+        self.worker = ProcessingWorker(self.generator)
         self.worker.status_signal.connect(self.update_status)
         self.worker.error_signal.connect(self.show_error)
         self.worker.progress_signal.connect(self.update_progress_bar)
@@ -1529,11 +1713,10 @@ class MainWindow(QMainWindow):
 
         self.export_action = QAction("&Export as...", self)
         self.export_action.setShortcut("Ctrl+E")
-        self.export_action.triggered.connect(self.export_dataset)
-
+        self.export_action.triggered.connect(self.export_dataset)        
         self.exit_action = QAction("E&xit", self)
         self.exit_action.setShortcut("Alt+F4")
-        self.exit_action.triggered.connect(self.close)
+        self.exit_action.triggered.connect(lambda: (self.close(), None)[1])
 
         # Tools actions
         self.validate_action = QAction("&Validate Dataset", self)
@@ -1564,28 +1747,32 @@ class MainWindow(QMainWindow):
     def _create_menu_bar(self):
         """Create the application menu bar."""
         menu_bar = self.menuBar()
+        if not menu_bar:
+            return
 
         # File menu
         file_menu = menu_bar.addMenu("&File")
-        file_menu.addAction(self.open_action)
-        file_menu.addAction(self.save_action)
-        file_menu.addAction(self.export_action)
-        file_menu.addSeparator()
-        file_menu.addAction(self.exit_action)
+        if file_menu:
+            file_menu.addAction(self.open_action)
+            file_menu.addAction(self.save_action)
+            file_menu.addAction(self.export_action)
+            file_menu.addSeparator()
+            file_menu.addAction(self.exit_action)
 
         # Tools menu
         tools_menu = menu_bar.addMenu("&Tools")
-        tools_menu.addAction(self.validate_action)
-        tools_menu.addAction(self.fix_action)
-        tools_menu.addAction(self.augment_action)
-        tools_menu.addAction(self.anonymize_action)
-        tools_menu.addAction(self.split_action)
-        tools_menu.addAction(self.visualize_action)
-
-        # Help menu
+        if tools_menu:
+            tools_menu.addAction(self.validate_action)
+            tools_menu.addAction(self.fix_action)
+            tools_menu.addAction(self.augment_action)
+            tools_menu.addAction(self.anonymize_action)
+            tools_menu.addAction(self.split_action)
+            tools_menu.addAction(self.visualize_action)        # Help menu
         help_menu = menu_bar.addMenu("&Help")
-        help_menu.addAction(self.about_action)
-        help_menu.addAction(self.help_action)
+
+        if help_menu:
+            help_menu.addAction(self.about_action)
+            help_menu.addAction(self.help_action)
 
     def _create_toolbar(self):
         """Create the main toolbar."""
@@ -1603,14 +1790,16 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.visualize_action)
 
     def _create_status_bar(self):
-        """Create the status bar."""
+        """Create the status bar."""        
         self.status_bar = self.statusBar()
-        self.status_bar.showMessage("Ready")
+        if self.status_bar:
+            self.status_bar.showMessage("Ready")
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedWidth(150)
         self.progress_bar.setVisible(False)
-        self.status_bar.addPermanentWidget(self.progress_bar)
+        if self.status_bar:
+            self.status_bar.addPermanentWidget(self.progress_bar)
 
     def _create_central_widget(self):
         """Create the central widget with tabs."""
@@ -1687,7 +1876,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(input_group)
 
-        # Template section
+               # Template section
         template_group = QGroupBox("2. Select Template Format")
         template_layout = QVBoxLayout(template_group)
 
@@ -1961,7 +2150,7 @@ class MainWindow(QMainWindow):
         # Data display
         self.edit_data_table = QTableWidget()
         self.edit_data_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.edit_data_table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | QTableWidget.EditTrigger.AnyKeyPressed) # Editable
+        self.edit_data_table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked)
         self.edit_data_table.itemChanged.connect(self._handle_edit_table_item_changed)
         layout.addWidget(self.edit_data_table)
 
@@ -2300,6 +2489,24 @@ class MainWindow(QMainWindow):
             self.show_error("No data available to export.")
             return
 
+        # Ensure data_to_export is properly typed as List[Dict[str, Any]]
+        if not isinstance(data_to_export, list):
+            self.show_error("Invalid data format for export.")
+            return
+        
+        # Validate that all items are dictionaries with string keys
+        validated_data: List[Dict[str, Any]] = []
+        for item in data_to_export:
+            if isinstance(item, dict):
+                # Convert any non-string keys to strings
+                validated_item: Dict[str, Any] = {}
+                for key, value in item.items():
+                    validated_item[str(key)] = value
+                validated_data.append(validated_item)
+            else:
+                self.show_error("Data contains non-dictionary items that cannot be exported.")
+                return
+
         file_path, _ = QFileDialog.getSaveFileName(
             self, "Export Dataset As...", "",
             "JSON Lines (*.jsonl);;JSON (*.json);;CSV (*.csv);;Text (*.txt);;Excel (*.xlsx);;"
@@ -2323,8 +2530,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Unknown Format", f"File extension '{ext}' not recognized. Defaulting to JSON Lines format.")
 
             try:
-                self.generator.save_data(data_to_export, file_path, format_type)
-                QMessageBox.information(self, "Export Successful", f"Successfully exported {len(data_to_export)} records to {file_path}")
+                self.generator.save_data(validated_data, file_path, format_type)
+                QMessageBox.information(self, "Export Successful", f"Successfully exported {len(validated_data)} records to {file_path}")
             except Exception as e:
                 self.show_error(f"Error exporting data: {str(e)}")
 
@@ -2335,9 +2542,10 @@ class MainWindow(QMainWindow):
         # If data is already loaded in another tab, try to transfer it
         if self.input_data:
             self._update_validate_data_table()
-            self.validation_results_text.clear()
+            self.validation_results_text.clear()           
             self.validation_results_text.append(f"Loaded {len(self.input_data)} records. Ready for validation.")
-            self.status_bar.showMessage(f"Loaded {len(self.input_data)} records")
+            if self.status_bar:
+                self.status_bar.showMessage(f"Loaded {len(self.input_data)} records")
         else:
             self.show_error("No dataset loaded. Please load a dataset first in the 'Convert' or 'Edit' tab.")
 
@@ -2538,7 +2746,8 @@ class MainWindow(QMainWindow):
             # Prepare for augmentation
             self.current_operation = "augment"
             self.progress_bar.setVisible(True)
-            self.status_bar.showMessage("Augmenting dataset...")
+            if self.status_bar:
+                self.status_bar.showMessage("Augmenting dataset...")
 
             # Using the worker thread
             self.worker.configure(
@@ -2621,7 +2830,8 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     self.show_error(f"Error saving augmented data: {str(e)}")
 
-            self.status_bar.showMessage("Data augmentation complete")
+            if self.status_bar:
+                self.status_bar.showMessage("Data augmentation complete")
         else:
             self.show_error("Error augmenting dataset.")
 
@@ -2838,7 +3048,8 @@ class MainWindow(QMainWindow):
             # Prepare for anonymization
             self.current_operation = "anonymize"
             self.progress_bar.setVisible(True)
-            self.status_bar.showMessage("Anonymizing dataset...")
+            if self.status_bar:
+                self.status_bar.showMessage("Anonymizing dataset...")
 
             # Using the worker thread
             self.worker.configure(
@@ -2856,53 +3067,6 @@ class MainWindow(QMainWindow):
             )
 
             self.worker.start()
-
-    def _anonymize_finished(self, result, output_mode, save_path=None, format_type=None):
-        """Handle completion of dataset anonymization."""
-        self.progress_bar.setVisible(False)
-
-        if result:
-            anonymized_data = result
-
-            if output_mode == "Replace existing data":
-                if self.output_data:
-                    self.output_data = anonymized_data
-                else:
-                    self.input_data = anonymized_data
-                # Update the table of the current tab if it's visible and relevant
-                current_tab_index = self.tabs.currentIndex()
-                if current_tab_index == 0: # Convert tab
-                    self._update_preview_table()
-                elif current_tab_index == 2: # Edit tab
-                    self._update_edit_data_table()
-                elif current_tab_index == 1: # Create tab
-                    self._update_created_data_table()
-
-                QMessageBox.information(
-                    self,
-                    "Anonymization Complete",
-                    f"Successfully anonymized sensitive data in the dataset."
-                )
-
-            elif output_mode == "Save to new file" and save_path:
-                # Save to new file
-                try:
-                    self.generator.save_data(anonymized_data, save_path, format_type)
-                    QMessageBox.information(
-                        self,
-                        "Anonymization Complete",
-                        f"Saved anonymized dataset to {save_path}"
-                    )
-                except Exception as e:
-                    self.show_error(f"Error saving anonymized data: {str(e)}")
-
-            self.status_bar.showMessage("Data anonymization complete")
-        else:
-            self.show_error("Error anonymizing dataset.")
-
-        # Reconnect the general finished signal handler
-        self.worker.finished_signal.disconnect()
-        self.worker.finished_signal.connect(self.process_finished)
 
     def split_dataset(self):
         """Split the dataset into train, validation, and test sets."""
@@ -3026,7 +3190,8 @@ class MainWindow(QMainWindow):
 
             self.current_operation = "split"
             self.progress_bar.setVisible(True)
-            self.status_bar.showMessage("Splitting dataset...")
+            if self.status_bar:
+                self.status_bar.showMessage("Splitting dataset...")
 
             self.worker.configure(
                 "split",
@@ -3049,21 +3214,12 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         if result:
             QMessageBox.information(self, "Split Complete", "Dataset successfully split and saved.")
-            self.status_bar.showMessage("Dataset splitting complete.")
+            if self.status_bar:
+                self.status_bar.showMessage("Dataset splitting complete.")
         else:
             self.show_error("Error splitting dataset.")
         self.worker.finished_signal.disconnect()
         self.worker.finished_signal.connect(self.process_finished) # Reconnect general handler
-
-    def _browse_save_path(self, line_edit: QLineEdit, default_name: str):
-        """Helper to browse for a save file path."""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save File", default_name,
-            "All Files (*)"
-        )
-        if file_path:
-            line_edit.setText(file_path)
-
 
     def visualize_dataset_menu(self):
         """Visualize the current dataset (triggered from menu/toolbar)."""
@@ -3073,7 +3229,8 @@ class MainWindow(QMainWindow):
         if self.input_data:
             self._update_visualize_data_table()
             self._update_stats_display()
-            self.status_bar.showMessage(f"Loaded {len(self.input_data)} records for visualization.")
+            if self.status_bar:
+                self.status_bar.showMessage(f"Loaded {len(self.input_data)} records for visualization.")
         else:
             self.show_error("No dataset loaded. Please load a dataset first in the 'Convert' or 'Edit' tab.")
 
@@ -3106,10 +3263,10 @@ class MainWindow(QMainWindow):
             "<p><b>Tools Menu:</b> Access advanced operations like Augmentation, Anonymization, and Splitting.</p>"
             "<p><b>Drag & Drop:</b> Drag and drop files onto the preview tables to load them.</p>"
         )
-
     def update_status(self, message):
         """Update status bar message."""
-        self.status_bar.showMessage(message)
+        if self.status_bar:
+            self.status_bar.showMessage(message)
 
     def update_progress_bar(self, current, total):
         """Update progress bar."""
@@ -3122,7 +3279,8 @@ class MainWindow(QMainWindow):
     def show_error(self, message):
         """Show error message."""
         QMessageBox.critical(self, "Error", message)
-        self.status_bar.showMessage("Error occurred")
+        if self.status_bar:
+            self.status_bar.showMessage("Error occurred")
         self.progress_bar.setVisible(False)
 
 
@@ -3134,6 +3292,7 @@ class MainWindow(QMainWindow):
                 self.input_data = result
                 self._update_preview_table()
                 self.map_fields_button.setEnabled(True)
+            if self.status_bar:
                 self.status_bar.showMessage(f"Loaded {len(result)} records")
 
             elif self.current_operation == "process":
@@ -3141,12 +3300,14 @@ class MainWindow(QMainWindow):
                 self._update_preview_table()
                 self.preview_button.setEnabled(True)
                 self.convert_button.setEnabled(True)
+            if self.status_bar:
                 self.status_bar.showMessage(f"Processed {len(result)} records")
 
             elif self.current_operation == "save":
                 if result:
                     QMessageBox.information(self, "Save Successful", "Dataset successfully saved.")
-                    self.status_bar.showMessage("Dataset saved.")
+                    if self.status_bar:
+                        self.status_bar.showMessage("Dataset saved.")
                 else:
                     self.show_error("Failed to save dataset.")
 
@@ -3154,29 +3315,30 @@ class MainWindow(QMainWindow):
                 self.output_data = result
                 self._update_created_data_table()
                 QMessageBox.information(self, "Generation Complete", f"Generated {len(result)} records.")
+            if self.status_bar:
                 self.status_bar.showMessage(f"Generated {len(result)} records.")
             # Add more result handling for other operations as needed
-            del self.current_operation # Clear current operation
+            del self.current_operation
 
-    def _on_tab_changed(self, index):
-        """Handle tab change event."""
-        # Reset status bar and progress bar when changing tabs
-        self.status_bar.showMessage("Ready")
-        self.progress_bar.setVisible(False)
+        def _on_tab_changed(self, index):
+            """Handle tab change event."""
+            # Reset status bar and progress bar when changing tabs
+            if self.status_bar:
+                self.status_bar.showMessage("Ready")
+            self.progress_bar.setVisible(False)
 
-        # Update data tables based on current tab's data
-        if index == 0: # Convert tab
-            self._update_preview_table()
-        elif index == 1: # Create tab
-            self._update_created_data_table()
-        elif index == 2: # Edit tab
-            self._update_edit_data_table()
-        elif index == 3: # Validate tab
-            self._update_validate_data_table()
-        elif index == 4: # Visualize tab
-            self._update_visualize_data_table()
-            self._update_stats_display()
-
+            # Update data tables based on current tab's data
+            if index == 0: # Convert tab
+                self._update_preview_table()
+            elif index == 1: # Create tab
+                self._update_created_data_table()
+            elif index == 2: # Edit tab
+                self._update_edit_data_table()
+            elif index == 3: # Validate tab
+                self._update_validate_data_table()
+            elif index == 4: # Visualize tab
+                self._update_visualize_data_table()
+                self._update_stats_display()
 
     def _handle_dropped_file(self, file_path: str):
         """Handle file dropped onto the preview table."""
@@ -3340,7 +3502,8 @@ class MainWindow(QMainWindow):
 
         self.current_operation = "load"
         self.progress_bar.setVisible(True)
-        self.status_bar.showMessage(f"Loading data from {file_path}...")
+        if self.status_bar:
+            self.status_bar.showMessage(f"Loading data from {file_path}...")
 
         self.worker.configure(
             "load",
@@ -3366,7 +3529,8 @@ class MainWindow(QMainWindow):
             self.generator.load_data(file_path, format_type)
             self.input_data = self.generator.input_data # Data for editing is stored in input_data
             self._update_edit_data_table()
-            self.status_bar.showMessage(f"Loaded {len(self.input_data)} records for editing.")
+            if self.status_bar:
+                self.status_bar.showMessage(f"Loaded {len(self.input_data)} records for editing.")
         except Exception as e:
             self.show_error(f"Error loading data: {str(e)}")
 
@@ -3389,7 +3553,8 @@ class MainWindow(QMainWindow):
             self._update_validate_data_table()
             self.validation_results_text.clear()
             self.validation_results_text.append(f"Loaded {len(self.input_data)} records. Ready for validation.")
-            self.status_bar.showMessage(f"Loaded {len(self.input_data)} records for validation.")
+            if self.status_bar:
+                self.status_bar.showMessage(f"Loaded {len(self.input_data)} records for validation.")
         except Exception as e:
             self.show_error(f"Error loading data: {str(e)}")
 
@@ -3411,7 +3576,8 @@ class MainWindow(QMainWindow):
             self.input_data = self.generator.input_data # Data for visualization is stored in input_data
             self._update_visualize_data_table()
             self._update_stats_display() # Update statistics display
-            self.status_bar.showMessage(f"Loaded {len(self.input_data)} records for visualization.")
+            if self.status_bar:
+                self.status_bar.showMessage(f"Loaded {len(self.input_data)} records for visualization.")
         except Exception as e:
             self.show_error(f"Error loading data: {str(e)}")
 
@@ -3540,7 +3706,8 @@ class MainWindow(QMainWindow):
             self.field_mapping = mapping
             self.current_template = template_name
 
-            self.status_bar.showMessage(f"Field mapping set with {len(mapping)} mappings.")
+            if self.status_bar:
+                self.status_bar.showMessage(f"Field mapping set with {len(mapping)} mappings.")
             self.preview_button.setEnabled(True)
             self.convert_button.setEnabled(True) # Enable convert button after mapping
 
@@ -3561,7 +3728,8 @@ class MainWindow(QMainWindow):
         # Set up and start worker thread
         self.current_operation = "process"
         self.progress_bar.setVisible(True)
-        self.status_bar.showMessage("Processing data for preview...")
+        if self.status_bar:
+            self.status_bar.showMessage("Processing data for preview...")
 
         self.worker.configure(
             "process",
@@ -3575,6 +3743,7 @@ class MainWindow(QMainWindow):
         """Convert and save the dataset."""
         if not self.output_data:
             # If output_data is empty, try to process first
+           
             try:
                 self._preview_converted_data()
                 # Wait for processing to finish, then save.
@@ -3599,7 +3768,8 @@ class MainWindow(QMainWindow):
 
         self.current_operation = "save"
         self.progress_bar.setVisible(True)
-        self.status_bar.showMessage(f"Saving data to {output_path}...")
+        if self.status_bar:
+            self.status_bar.showMessage(f"Saving data to {output_path}...")
 
         self.worker.configure(
             "save",
@@ -3636,7 +3806,8 @@ class MainWindow(QMainWindow):
 
         self.current_operation = "generate"
         self.progress_bar.setVisible(True)
-        self.status_bar.showMessage(f"Generating {num_records} records...")
+        if self.status_bar:
+            self.status_bar.showMessage(f"Generating {num_records} records...")
 
         # Configure worker for generation
         self.worker.configure(
@@ -3664,7 +3835,8 @@ class MainWindow(QMainWindow):
 
         try:
             self.generator.save_data(self.output_data, output_path, format_type)
-            self.status_bar.showMessage(f"Saved {len(self.output_data)} records to {output_path}")
+            if self.status_bar:
+                self.status_bar.showMessage(f"Saved {len(self.output_data)} records to {output_path}")
             QMessageBox.information(self, "Export Successful", f"Successfully exported {len(self.output_data)} records to {output_path}")
         except Exception as e:
             self.show_error(f"Error exporting data: {str(e)}")
@@ -3682,9 +3854,13 @@ class MainWindow(QMainWindow):
             self.show_error("Please specify an output file path.")
             return
 
+        self.save_edited_data(output_path, format_type)
+
+    def save_edited_data(self, output_path, format_type):
         try:
             self.generator.save_data(self.input_data, output_path, format_type)
-            self.status_bar.showMessage(f"Saved {len(self.input_data)} records to {output_path}")
+            if self.status_bar:
+                self.status_bar.showMessage(f"Saved {len(self.input_data)} records to {output_path}")
             QMessageBox.information(self, "Save Successful", f"Successfully saved {len(self.input_data)} records to {output_path}")
         except Exception as e:
             self.show_error(f"Error saving data: {str(e)}")
@@ -3725,11 +3901,11 @@ class MainWindow(QMainWindow):
         ok_button = QPushButton("Add Record")
         cancel_button = QPushButton("Cancel")
         ok_button.clicked.connect(dialog.accept)
-        cancel_button.clicked.connect(dialog.reject)
+        cancel_button.clicked.connect(dialog.reject)       
         button_layout.addWidget(ok_button)
         button_layout.addWidget(cancel_button)
         layout.addRow(button_layout)
-
+        
         if dialog.exec_() == QDialog.Accepted:
             for field, widget in field_widgets.items():
                 new_record[field] = widget.text()
