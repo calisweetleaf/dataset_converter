@@ -58,7 +58,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
     QDockWidget, QStackedWidget, QToolBar, QStatusBar, QDialog,
     QWizard, QWizardPage, QFormLayout, QGridLayout, QMenu, QAction,
     QToolTip, QHeaderView, QInputDialog, QCompleter)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl, QSize, QTimer, QSettings, QMimeData, QStringListModel
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl, QSize, QTimer, QSettings, QMimeData, QStringListModel, QSizeF, QPointF
 from PyQt5.QtGui import QIcon, QFont, QDrag, QPixmap, QColor, QPainter, QPalette, QDesktopServices
 try:
     import pyarrow.parquet as pq
@@ -290,7 +290,7 @@ class DatasetGenerator:
         self.warnings = []
         self.statistics = {}
 
-    def load_data(self, file_path: str = None, format_type: Optional[str] = None, table_name: Optional[str] = None) -> None:
+    def load_data(self, file_path: Optional[str] = None, format_type: Optional[str] = None, table_name: Optional[str] = None) -> None:
         if file_path is None:
             raise ValueError("No input file specified. Place your file in the 'dataset_input' directory.")
         file_path = os.path.join(INPUT_DIR, os.path.basename(file_path))
@@ -354,12 +354,43 @@ class DatasetGenerator:
                 if not HDF5_AVAILABLE:
                     raise ImportError("h5py library not available for HDF5 format.")
                 with h5py.File(file_path, 'r') as f:
-                    dataset_name = list(f.keys())[0] if not table_name else table_name
-                    dset = f[dataset_name]
-                    if hasattr(dset, 'dtype') and hasattr(dset.dtype, 'names') and dset.dtype.names:
-                        self.input_data = [{name: row[i] for i, name in enumerate(dset.dtype.names)} for row in dset[:]]
+                    # Determine the dataset name to load
+                    if not table_name:
+                        if not f.keys():
+                            raise ValueError("HDF5 file contains no objects.")
+                        # Try to find a dataset if no table_name is specified, or default to first key
+                        # This part could be enhanced to search for the first Dataset object
+                        dataset_name = list(f.keys())[0] 
                     else:
-                        self.input_data = [{"value": v} for v in dset[:]]
+                        dataset_name = table_name
+
+                    if dataset_name not in f:
+                        raise ValueError(f"Object '{dataset_name}' not found in HDF5 file.")
+                        
+                    h5_object = f[dataset_name]
+
+                    if not isinstance(h5_object, h5py.Dataset):
+                        # If the object is a Group, list available datasets within it
+                        available_datasets = []
+                        if isinstance(h5_object, h5py.Group):
+                            for key in h5_object.keys():
+                                if isinstance(h5_object[key], h5py.Dataset):
+                                    available_datasets.append(key)
+                        
+                        error_msg = f"The specified HDF5 object '{dataset_name}' is a Group, not a Dataset. "
+                        if available_datasets:
+                            error_msg += f"Available datasets in this group: {', '.join(available_datasets)}. Please specify a full path to a dataset."
+                        else:
+                            error_msg += "No datasets found in this group. Please specify a full path to a dataset."
+                        raise ValueError(error_msg)
+
+                    # Now h5_object is confirmed to be a Dataset
+                    if hasattr(h5_object, 'dtype') and hasattr(h5_object.dtype, 'names') and h5_object.dtype.names:
+                        # Handle structured arrays (compound dtypes)
+                        self.input_data = [{name: row[i] for i, name in enumerate(h5_object.dtype.names)} for row in h5_object[:]]
+                    else:
+                        # Handle simple arrays (homogeneous dtypes)
+                        self.input_data = [{"value": v.item() if hasattr(v, 'item') else v} for v in h5_object[:]] # Use .item() for numpy scalars
 
             elif format_type == 'sqlite':
                 conn = sqlite3.connect(file_path)
@@ -377,27 +408,68 @@ class DatasetGenerator:
                 conn.close()
 
             elif format_type == 'xml':
-                if not XML_AVAILABLE:
-                    raise ImportError("lxml library not available for XML format.")
-                root = etree.Element("dataset", attrib={}, nsmap=None)
-                for item in data:
-                    record = etree.SubElement(root, "record", attrib={}, nsmap=None)
-                    def _add_xml_element(parent, data_item):
-                        if isinstance(data_item, dict):
-                            for k, v in data_item.items():
-                                if isinstance(v, (dict, list)):
-                                    child = etree.SubElement(parent, k, attrib={}, nsmap=None)
-                                    _add_xml_element(child, v)
-                                else:
-                                    child = etree.SubElement(parent, k, attrib={}, nsmap=None)
-                                    child.text = str(v)
-                        elif isinstance(data_item, list):
-                            for sub_item in data_item:
-                                child = etree.SubElement(parent, "item", attrib={}, nsmap=None)
-                                _add_xml_element(child, sub_item)
-                    _add_xml_element(record, item)
-                tree = etree.ElementTree(root)
-                tree.write(output_path, pretty_print=True, encoding='utf-8', xml_declaration=True)
+                if not XML_AVAILABLE and not XML_AVAILABLE_BASIC:
+                    raise ImportError("An XML parsing library (lxml or xml.etree.ElementTree) is not available. Install with 'pip install lxml'.")
+                
+                self.input_data = []
+                try:
+                    xml_root = None
+                    if XML_AVAILABLE: # Prefer lxml if available
+                        logger.debug("Using lxml for XML parsing.")
+                        parsed_tree = etree.parse(file_path)
+                        xml_root = parsed_tree.getroot()
+                    elif XML_AVAILABLE_BASIC: # Fallback to basic ElementTree
+                        logger.debug("Using xml.etree.ElementTree for XML parsing.")
+                        parsed_tree = ET.parse(file_path)
+                        xml_root = parsed_tree.getroot()
+                    
+                    if xml_root is not None:
+                        # Assuming XML structure: <root><record>...</record><record>...</record></root>
+                        # Or if the root itself is a list of records, e.g. from pandas.to_xml(root_name='records')
+                        # If root tag is 'dataset' or 'records' or similar, iterate its children.
+                        # Otherwise, assume the root itself is a single record, or contains a list of records.
+                        # This heuristic might need refinement based on common XML dataset structures.
+                        
+                        # If the root has children, assume children are records
+                        if len(xml_root): # Check if root has child elements
+                            for element in xml_root:
+                                self.input_data.append(self._xml_to_dict(element))
+                        elif xml_root.tag and xml_root.text is not None : # If root has no children but has a tag (and possibly text/attributes)
+                             # This could be a single record file, or a file not matching expected list format.
+                             # For simplicity, if it's not a list of records, we could wrap it as one.
+                             # However, _xml_to_dict expects an element that represents one record.
+                             # If the file is just <mydata>...</mydata>, self._xml_to_dict(xml_root) would be one item.
+                             # This is complex. For now, let's assume the standard is a root with record children.
+                             # If the user wants to load a single complex XML object as one record:
+                             # self.input_data.append(self._xml_to_dict(xml_root))
+                             # This would create a single entry in self.input_data.
+                             # The current _xml_to_dict is designed for an element representing a single record.
+                             # Let's stick to the assumption of a root containing multiple record elements.
+                             # If the file is just one record, e.g. <record>...</record>, this loop won't run.
+                             # So, if len(xml_root) == 0, we might want to process xml_root itself if it's meaningful
+                             # For a dataset, usually there's a list of records.
+                             # If one record is at root level, then len(xml_root) would be 0 if it has no children.
+                             # This logic depends heavily on expected XML structure.
+                             # The most common case for a "dataset" is multiple entries.
+                             logger.warning(f"XML root '{xml_root.tag}' has no child elements. If the root itself is a single record, this is fine. Otherwise, expected child elements representing records.")
+                             # Option: if no children, consider the root as the single item if it's not just a container
+                             if xml_root.tag not in ["dataset", "records", "root"]: # common container names
+                                self.input_data.append(self._xml_to_dict(xml_root))
+
+
+                    if not self.input_data and xml_root is not None:
+                         logger.warning(f"No data loaded from XML file {file_path}. Ensure it has a root element with child elements representing records, or a single record as root if that's intended.")
+                    elif not self.input_data and xml_root is None:
+                         logger.error(f"Failed to parse XML root from {file_path}.")
+
+
+                except ET.ParseError as e_et:
+                    raise ValueError(f"Error parsing XML with ElementTree: {str(e_et)}. File: {file_path}")
+                except Exception as e_lxml: # lxml might raise etree.XMLSyntaxError which is a subclass of Exception
+                    if XML_AVAILABLE and isinstance(e_lxml, etree.XMLSyntaxError):
+                         raise ValueError(f"Error parsing XML with lxml: {str(e_lxml)}. File: {file_path}")
+                    raise ValueError(f"An unexpected error occurred during XML parsing: {str(e)}. File: {file_path}")
+
 
             elif format_type == 'yaml':
                 if not YAML_AVAILABLE:
@@ -587,7 +659,7 @@ class DatasetGenerator:
         _map_structure(template_structure, result)
         return result
 
-    def save_data(self, data: List[Dict[str, Any]], output_path: str = None, format_type: str = None) -> None:
+    def save_data(self, data: List[Dict[str, Any]], output_path: Optional[str] = None, format_type: Optional[str] = None) -> None:
         if output_path is None:
             raise ValueError("No output file specified. Output will be saved in the 'dataset_output' directory.")
         output_path = os.path.join(OUTPUT_DIR, os.path.basename(output_path))
@@ -1178,7 +1250,7 @@ class CustomValidationRuleDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Custom Validation Rules")
         self.setGeometry(200, 200, 600, 400)
-        self.setModal(True)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
         self.all_fields = all_fields
         self.rules = current_rules if current_rules else []
@@ -1198,7 +1270,7 @@ class CustomValidationRuleDialog(QDialog):
         self.rules_scroll_area.setWidgetResizable(True)
         self.rules_container = QWidget()
         self.rules_layout = QVBoxLayout(self.rules_container)
-        self.rules_layout.setAlignment(Qt.AlignTop)
+        self.rules_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.rules_scroll_area.setWidget(self.rules_container)
         main_layout.addWidget(self.rules_scroll_area)
 
@@ -1313,16 +1385,19 @@ class DragDropTableWidget(QTableWidget):
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
+        mime_data = event.mimeData()
+        if mime_data and mime_data.hasUrls():
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
+        mime_data = event.mimeData()
+        if mime_data and mime_data.hasUrls():
             event.acceptProposedAction()
 
     def dropEvent(self, event):
-        if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
+        mime_data = event.mimeData()
+        if mime_data and mime_data.hasUrls():
+            for url in mime_data.urls():
                 file_path = url.toLocalFile()
                 self.file_dropped.emit(file_path)
                 break  # Just take the first file
@@ -1347,12 +1422,14 @@ class CustomComboBox(QComboBox):
 
     def event(self, event):
         if event.type() == event.Type.ToolTip:
-            index = self.view().indexAt(event.pos())
-            if index.isValid():
-                text = self.itemText(index.row())
-                if text in self.descriptions:
-                    QToolTip.showText(event.globalPos(), self.descriptions[text])
-                    return True
+            view = self.view()
+            if view:
+                index = view.indexAt(event.pos())
+                if index.isValid():
+                    text = self.itemText(index.row())
+                    if text in self.descriptions:
+                        QToolTip.showText(event.globalPos(), self.descriptions[text])
+                        return True
         return super().event(event)
 
 
@@ -1399,13 +1476,13 @@ class MainWindow(QMainWindow):
     def _get_icon(self):
         """Create an application icon."""
         pixmap = QPixmap(64, 64)
-        pixmap.fill(Qt.transparent)
+        pixmap.fill(Qt.GlobalColor.transparent)
 
         painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Draw a simple icon - dataset symbol
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(41, 128, 185))  # Blue
         painter.drawEllipse(5, 5, 54, 54)
 
@@ -1424,18 +1501,18 @@ class MainWindow(QMainWindow):
         dark_palette = QPalette()
 
         dark_palette.setColor(QPalette.Window, QColor(53, 53, 53))
-        dark_palette.setColor(QPalette.WindowText, Qt.white)
+        dark_palette.setColor(QPalette.WindowText, Qt.GlobalColor.white)
         dark_palette.setColor(QPalette.Base, QColor(25, 25, 25))
         dark_palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
-        dark_palette.setColor(QPalette.ToolTipBase, Qt.white)
-        dark_palette.setColor(QPalette.ToolTipText, Qt.white)
-        dark_palette.setColor(QPalette.Text, Qt.white)
+        dark_palette.setColor(QPalette.ToolTipBase, Qt.GlobalColor.white)
+        dark_palette.setColor(QPalette.ToolTipText, Qt.GlobalColor.white)
+        dark_palette.setColor(QPalette.Text, Qt.GlobalColor.white)
         dark_palette.setColor(QPalette.Button, QColor(53, 53, 53))
-        dark_palette.setColor(QPalette.ButtonText, Qt.white)
-        dark_palette.setColor(QPalette.BrightText, Qt.red)
+        dark_palette.setColor(QPalette.ButtonText, Qt.GlobalColor.white)
+        dark_palette.setColor(QPalette.BrightText, Qt.GlobalColor.red)
         dark_palette.setColor(QPalette.Link, QColor(42, 130, 218))
         dark_palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
-        dark_palette.setColor(QPalette.HighlightedText, Qt.black)
+        dark_palette.setColor(QPalette.HighlightedText, Qt.GlobalColor.black)
 
         self.setPalette(dark_palette)
 
@@ -1542,7 +1619,7 @@ class MainWindow(QMainWindow):
 
         # Create tab widget
         self.tabs = QTabWidget()
-        self.tabs.setTabPosition(QTabWidget.North)
+        self.tabs.setTabPosition(QTabWidget.TabPosition.North)
 
         # Create tabs for different operations
         self.convert_tab = self._create_convert_tab()
@@ -1685,7 +1762,7 @@ class MainWindow(QMainWindow):
 
         self.preview_table = DragDropTableWidget()
         self.preview_table.file_dropped.connect(self._handle_dropped_file)
-        self.preview_table.setEditTriggers(QTableWidget.NoEditTriggers) # Not editable in preview
+        self.preview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers) # Not editable in preview
         layout.addWidget(self.preview_table)
 
         # Stretch to fill space
@@ -1776,7 +1853,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.created_data_label)
 
         self.created_data_table = QTableWidget()
-        self.created_data_table.setEditTriggers(QTableWidget.NoEditTriggers) # Not editable here
+        self.created_data_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers) # Not editable here
         layout.addWidget(self.created_data_table)
 
         # Export section
@@ -1883,8 +1960,8 @@ class MainWindow(QMainWindow):
 
         # Data display
         self.edit_data_table = QTableWidget()
-        self.edit_data_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.edit_data_table.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.AnyKeyPressed) # Editable
+        self.edit_data_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.edit_data_table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | QTableWidget.EditTrigger.AnyKeyPressed) # Editable
         self.edit_data_table.itemChanged.connect(self._handle_edit_table_item_changed)
         layout.addWidget(self.edit_data_table)
 
@@ -2022,8 +2099,8 @@ class MainWindow(QMainWindow):
 
         # Data preview
         self.validate_data_table = QTableWidget()
-        self.validate_data_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.validate_data_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.validate_data_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.validate_data_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self.validate_data_table)
 
         # Stretch to fill space
@@ -2124,7 +2201,7 @@ class MainWindow(QMainWindow):
 
         # Visualization display (placeholder)
         self.viz_placeholder = QLabel("Visualizations will appear here after generation.")
-        self.viz_placeholder.setAlignment(Qt.AlignCenter)
+        self.viz_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.viz_placeholder.setMinimumHeight(300)
         self.viz_placeholder.setStyleSheet("background-color: #2a2a2a; border: 1px solid #444;")
         layout.addWidget(self.viz_placeholder)
@@ -2305,10 +2382,10 @@ class MainWindow(QMainWindow):
         factor_label = QLabel("Each record will be augmented this many times:")
         factor_layout.addWidget(factor_label)
 
-        factor_slider = QSlider(Qt.Horizontal)
+        factor_slider = QSlider(Qt.Orientation.Horizontal)
         factor_slider.setRange(1, 10)
         factor_slider.setValue(2)
-        factor_slider.setTickPosition(QSlider.TicksBelow)
+        factor_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         factor_slider.setTickInterval(1)
         factor_layout.addWidget(factor_slider)
 
@@ -3368,7 +3445,7 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Map Fields")
         dialog.setMinimumWidth(600)
-        dialog.setModal(True)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
 
         main_layout = QVBoxLayout(dialog)
         main_layout.addWidget(QLabel(f"Map input fields to '{template_name}' template fields:"))
