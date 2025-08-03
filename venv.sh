@@ -48,8 +48,8 @@ log "Starting Dataset Generator Original Virtual Environment Setup"
 log "=================================================="
 
 # Check if we're in the correct directory
-if [ ! -f "dataset_generator_original.py" ]; then
-    error "dataset_generator_original.py not found. Please run this script from the dataset_converter directory."
+if [ ! -f "dataset_generator/main.py" ]; then
+    error "dataset_generator/main.py not found. Please run this script from the project root directory."
     exit 1
 fi
 
@@ -170,7 +170,7 @@ log "Running validation tests..."
 
 # Test Python syntax
 log "Testing Python syntax..."
-python -m py_compile dataset_generator_original.py
+python -m py_compile dataset_generator/main.py
 if [ $? -eq 0 ]; then
     success "Python syntax validation passed"
 else
