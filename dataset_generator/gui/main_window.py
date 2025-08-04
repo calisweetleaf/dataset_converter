@@ -95,7 +95,8 @@ class MainWindow(QMainWindow):
         output_browse_button = QPushButton("Browse...")
         output_browse_button.clicked.connect(self._browse_output_file)
         self.output_format_combo = CustomComboBox()
-        for fmt, desc in OUTPUT_FORMATS.items(): self.output_format_combo.addItemWithDescription(fmt, desc)
+        for fmt, desc in OUTPUT_FORMATS.items():
+            self.output_format_combo.addItemWithDescription(fmt, desc)
         self.convert_button = QPushButton("Convert & Save")
         self.convert_button.setEnabled(False)
         self.convert_button.clicked.connect(self._convert_dataset)
