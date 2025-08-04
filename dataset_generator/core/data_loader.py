@@ -139,7 +139,12 @@ def load_data(file_path: str, format_type: Optional[str] = None, table_name: Opt
                 if not tables:
                     raise ValueError("No tables found in SQLite database")
                 table_name = tables[0][0]
-            cursor = conn.execute(f"SELECT * FROM {table_name}")
+            # Validate table_name against the list of tables in the database
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            valid_tables = {row[0] for row in cursor.fetchall()}
+            if table_name not in valid_tables:
+                raise ValueError(f"Table '{table_name}' not found in SQLite database")
+            cursor = conn.execute(f"SELECT * FROM \"{table_name}\"")
             input_data = [dict(row) for row in cursor.fetchall()]
             conn.close()
 
