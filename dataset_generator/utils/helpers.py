@@ -8,10 +8,7 @@ def get_nested_value(data: Dict, path: str, default=None):
         if isinstance(current, dict) and part in current:
             current = current[part]
         elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
-            try:
-                current = current[int(part)]
-            except IndexError:
-                return default # Index out of bounds for list
+            current = current[int(part)]
         else:
             return default
     return current
