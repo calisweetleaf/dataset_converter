@@ -65,7 +65,8 @@ class MainWindow(QMainWindow):
         browse_button = QPushButton("Browse...")
         browse_button.clicked.connect(self._browse_input_file)
         self.input_format_combo = CustomComboBox()
-        for fmt, desc in INPUT_FORMATS.items(): self.input_format_combo.addItemWithDescription(fmt, desc)
+        for fmt, desc in INPUT_FORMATS.items():
+            self.input_format_combo.addItemWithDescription(fmt, desc)
         load_button = QPushButton("Load Dataset")
         load_button.clicked.connect(self._load_dataset)
         input_layout.addRow("File:", self.input_path_edit)
