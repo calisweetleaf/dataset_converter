@@ -78,7 +78,8 @@ class MainWindow(QMainWindow):
         process_group = QGroupBox("Process")
         process_layout = QFormLayout(process_group)
         self.template_combo = CustomComboBox()
-        for name, info in DATASET_TEMPLATES.items(): self.template_combo.addItemWithDescription(name, info["description"])
+        for name, info in DATASET_TEMPLATES.items():
+            self.template_combo.addItemWithDescription(name, info["description"])
         self.map_fields_button = QPushButton("Map Fields")
         self.map_fields_button.setEnabled(False)
         self.map_fields_button.clicked.connect(self._show_field_mapping_dialog)
