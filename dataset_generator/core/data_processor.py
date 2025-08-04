@@ -95,7 +95,7 @@ def split_dataset(data: List[Dict[str, Any]], train_ratio: float = 0.8, valid_ra
     elif valid_ratio > 0:
         valid_data = temp_data
         test_data = []
-    else: # test_ratio > 0 or both are 0
+    else: # test_ratio > 0 or both valid_ratio and test_ratio are 0
         valid_data = []
         test_data = temp_data
 
